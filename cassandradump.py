@@ -1,4 +1,5 @@
 import argparse
+import os
 import sys
 import itertools
 import codecs
@@ -222,7 +223,8 @@ def export_data(session):
         sys.stderr.write('--cf, --keyspace and --filter can\'t be combined\n')
         sys.exit(1)
 
-    f = codecs.open(args.export_file, 'w', encoding='utf-8')
+    if not args.export_folder:
+        f = codecs.open(args.export_file, 'w', encoding='utf-8')
 
     keyspaces = None
     exclude_list = []
@@ -248,7 +250,7 @@ def export_data(session):
         for keyname in keyspaces:
             keyspace = get_keyspace_or_fail(session, keyname)
 
-            if not args.no_create:
+            if not args.no_create and not args.export_folder:
                 log_quiet('Exporting schema for keyspace ' + keyname + '\n')
                 f.write('DROP KEYSPACE IF EXISTS "' + keyname + '";\n')
                 f.write(keyspace.export_as_string() + '\n')
@@ -259,6 +261,14 @@ def export_data(session):
                     continue
                 elif tableval.is_cql_compatible:
                     if not args.no_insert:
+                        if args.export_folder:
+                            folder_path = os.path.join(args.export_folder, keyspace.name)
+                            export_file = os.path.join(folder_path, "%s.cql" % tablename)
+                            try:
+                                os.makedirs(folder_path)
+                            except FileExistsError:
+                                pass
+                            f = codecs.open(export_file, 'w', encoding='utf-8')
                         log_quiet('Exporting data for column family ' + keyname + '.' + tablename + '\n')
                         table_to_cqlfile(session, keyname, tablename, None, tableval, f, limit)
 
@@ -372,6 +382,7 @@ def main():
     parser.add_argument('--connect-timeout', help='set timeout for connecting to the cluster (in seconds)', type=int)
     parser.add_argument('--cf', help='export a column family. The name must include the keyspace, e.g. "system.schema_columns". Can be specified multiple times', action='append')
     parser.add_argument('--export-file', help='export data to the specified file')
+    parser.add_argument('--export-folder', help='export data to the specified folder (one directory per keyspace, one file per table)')
     parser.add_argument('--filter', help='export a slice of a column family according to a CQL filter. This takes essentially a typical SELECT query stripped of the initial "SELECT ... FROM" part (e.g. "system.schema_columns where keyspace_name =\'OpsCenter\'", and exports only that data. Can be specified multiple times', action='append')
     parser.add_argument('--host', help='the address of a Cassandra node in the cluster (localhost if omitted)')
     parser.add_argument('--port', help='the port of a Cassandra node in the cluster (9042 if omitted)')
@@ -393,8 +404,8 @@ def main():
 
     args = parser.parse_args()
 
-    if args.import_file is None and args.export_file is None:
-        sys.stderr.write('--import-file or --export-file must be specified\n')
+    if args.import_file is None and args.export_file is None and args.export_folder is None:
+        sys.stderr.write('--import-file, --export-file or --export-folder must be specified\n')
         sys.exit(1)
 
     if (args.userkey is not None or args.usercert is not None) and (args.userkey is None or args.usercert is None):
@@ -405,6 +416,15 @@ def main():
         sys.stderr.write('--import-file and --export-file can\'t be specified at the same time\n')
         sys.exit(1)
 
+    if args.import_file is not None and args.export_folder is not None:
+        sys.stderr.write('--import-file and --export-folder can\'t be specified at the same time\n')
+        sys.exit(1)
+
+    if args.export_file is not None and args.export_folder is not None:
+        sys.stderr.write('--export-file and --export-folder can\'t be specified at the same time\n')
+        sys.exit(1)
+
+
     if args.ssl is True and args.certfile is None:
         sys.stderr.write('--certfile must also be specified when using --ssl\n')
         sys.exit(1)
@@ -414,6 +434,8 @@ def main():
     if args.import_file:
         import_data(session)
     elif args.export_file:
+        export_data(session)
+    elif args.export_folder:
         export_data(session)
 
     cleanup_cluster(session)
